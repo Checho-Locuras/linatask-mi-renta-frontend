@@ -1,0 +1,109 @@
+<div class="mr-shell">
+  <header class="mr-top">
+    <div class="mr-brand">Mi renta <small>Asistente de declaración de renta 2025 · formulario 210</small></div>
+    <div class="mr-actions" *ngIf="session.isAuthenticated()">
+      <span class="mr-muted">{{ session.user()?.email }}</span>
+      <button type="button" class="mr-btn secondary small" (click)="logout()">Cerrar sesión de Mi renta</button>
+    </div>
+  </header>
+
+  <div class="mr-alert warn" *ngIf="!session.configured">
+    Mi renta aún no está disponible en este entorno (falta configurar la URL del servicio).
+  </div>
+
+  <div class="mr-alert" role="note">
+    Mi renta prepara un <strong>borrador</strong> que debe revisar un contador. No presenta la declaración por ti y
+    <strong>nunca te pedirá tu contraseña de la DIAN</strong>.
+    <a routerLink="/consulta-dian">¿Debo declarar? Consulta orientativa</a>
+  </div>
+
+  <div class="mr-alert err" *ngIf="error()" role="alert">{{ error() }}</div>
+  <div class="mr-alert ok" *ngIf="info()" role="status">{{ info() }}</div>
+
+  <!-- Con sesión -->
+  <ng-container *ngIf="session.isAuthenticated(); else authPanel">
+    <section class="mr-card">
+      <h2>{{ session.user()?.role === 'Accountant' ? 'Expedientes' : 'Mis expedientes' }}</h2>
+      <p class="mr-muted" *ngIf="cases() === null">Cargando…</p>
+      <ng-container *ngIf="cases() as list">
+        <p class="mr-muted" *ngIf="list.length === 0">Aún no tienes un expediente para el año gravable 2025.</p>
+        <div class="mr-table-wrap" *ngIf="list.length > 0">
+          <table class="mr-table">
+            <thead><tr><th>Año</th><th>Contribuyente</th><th>Estado</th><th></th></tr></thead>
+            <tbody>
+              <tr *ngFor="let c of list">
+                <td>{{ c.taxYear }}</td>
+                <td>{{ c.maskedTaxpayerDocument }} <span class="mr-badge" *ngIf="!c.isOwner">Cliente</span></td>
+                <td><span class="mr-badge">{{ statusLabels[c.status] ?? c.status }}</span></td>
+                <td><a class="mr-btn small" [routerLink]="['/expediente', c.id]">Abrir</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mr-actions" *ngIf="session.user()?.role !== 'Accountant' && !hasOwnCase(list)">
+          <button type="button" class="mr-btn" (click)="createCase()" [disabled]="busy()">Crear mi expediente 2025</button>
+        </div>
+      </ng-container>
+    </section>
+  </ng-container>
+
+  <!-- Sin sesión -->
+  <ng-template #authPanel>
+    <section class="mr-card" style="max-width: 520px; margin-inline: auto;">
+      <div class="mr-tabs" role="tablist">
+        <button type="button" role="tab" [attr.aria-selected]="mode() === 'login'" (click)="setMode('login')">Iniciar sesión</button>
+        <button type="button" role="tab" [attr.aria-selected]="mode() === 'register'" (click)="setMode('register')">Crear cuenta</button>
+        <button type="button" role="tab" [attr.aria-selected]="mode() === 'forgot'" (click)="setMode('forgot')">Olvidé mi contraseña</button>
+      </div>
+
+      <p class="mr-muted" *ngIf="prefilledEmail">
+        Precargamos tu correo. Mi renta usa una cuenta independiente: su contraseña es propia y no se comparte con
+        otros servicios.
+      </p>
+
+      <form *ngIf="mode() === 'login'" [formGroup]="loginForm" (ngSubmit)="login()" novalidate>
+        <div class="mr-field">
+          <label for="mr-id">Correo o cédula</label>
+          <input id="mr-id" formControlName="identifier" autocomplete="username" />
+        </div>
+        <div class="mr-field">
+          <label for="mr-pw">Contraseña de Mi renta</label>
+          <input id="mr-pw" type="password" formControlName="password" autocomplete="current-password" />
+        </div>
+        <div class="mr-actions">
+          <button class="mr-btn" type="submit" [disabled]="busy() || !session.configured">Entrar</button>
+          <button class="mr-btn secondary" type="button" (click)="resend()" [disabled]="busy()">Reenviar verificación</button>
+        </div>
+      </form>
+
+      <form *ngIf="mode() === 'register'" [formGroup]="registerForm" (ngSubmit)="register()" novalidate>
+        <div class="mr-field">
+          <label for="mr-email">Correo</label>
+          <input id="mr-email" type="email" formControlName="email" autocomplete="email" />
+        </div>
+        <div class="mr-field">
+          <label for="mr-doc">Cédula de ciudadanía</label>
+          <input id="mr-doc" inputmode="numeric" formControlName="documentNumber" autocomplete="off" />
+        </div>
+        <div class="mr-field">
+          <label for="mr-npw">Contraseña (mínimo 10 caracteres, letras y números)</label>
+          <input id="mr-npw" type="password" formControlName="password" autocomplete="new-password" />
+        </div>
+        <label class="mr-check">
+          <input type="checkbox" formControlName="accept" />
+          <span>Acepto el tratamiento de mis datos para preparar mi borrador de renta (aviso de privacidad de Mi renta).</span>
+        </label>
+        <button class="mr-btn" type="submit" [disabled]="busy() || registerForm.invalid || !session.configured">Crear cuenta</button>
+        <p class="mr-muted">Te enviaremos un enlace para verificar tu correo antes de entrar.</p>
+      </form>
+
+      <form *ngIf="mode() === 'forgot'" [formGroup]="forgotForm" (ngSubmit)="forgot()" novalidate>
+        <div class="mr-field">
+          <label for="mr-femail">Correo de tu cuenta de Mi renta</label>
+          <input id="mr-femail" type="email" formControlName="email" autocomplete="email" />
+        </div>
+        <button class="mr-btn" type="submit" [disabled]="busy() || !session.configured">Enviar instrucciones</button>
+      </form>
+    </section>
+  </ng-template>
+</div>

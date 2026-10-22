@@ -1,0 +1,213 @@
+<div class="mr-shell" *ngIf="notFound()">
+  <section class="mr-card" role="alert">
+    <h2>Este expediente no existe o no tienes acceso</h2>
+    <p class="mr-muted">Revisa el enlace o vuelve a tus expedientes.</p>
+    <a class="mr-btn" routerLink="/">Ir a mis expedientes</a>
+  </section>
+</div>
+<div class="mr-shell" *ngIf="!notFound()">
+  <p class="mr-muted" *ngIf="!theCase() && !error()" aria-live="polite">Cargando expediente…</p>
+  <header class="mr-top">
+    <div>
+      <a routerLink="/" class="mr-muted">← Mis expedientes</a>
+      <div class="mr-brand">Renta {{ theCase()?.taxYear ?? 2025 }} <small>{{ theCase()?.maskedTaxpayerDocument }}</small></div>
+    </div>
+    <div *ngIf="progress() as p" style="min-width: 240px">
+      <span class="mr-badge" [class.warn]="p.status === 'NeedsProfessionalReview' || p.status === 'Blocked'" [class.ok]="p.status === 'ApprovedForExport' || p.status === 'Completed'">
+        {{ statusLabels[p.status] ?? p.status }}
+      </span>
+      <div class="mr-progress" style="margin-top: 8px" role="progressbar" [attr.aria-valuenow]="p.percentComplete" aria-valuemin="0" aria-valuemax="100">
+        <span [style.width.%]="p.percentComplete"></span>
+      </div>
+      <span class="mr-muted">{{ p.questionsAnswered }} de {{ p.questionsTotal }} preguntas · {{ p.documentsTotal }} documentos</span>
+    </div>
+  </header>
+
+  <div class="mr-alert warn" *ngIf="progress()?.blockedReason">{{ progress()?.blockedReason }}</div>
+  <div class="mr-alert err" *ngIf="error()" role="alert">{{ error() }}</div>
+  <div class="mr-alert ok" *ngIf="notice()" role="status">{{ notice() }}</div>
+
+  <nav class="mr-tabs" role="tablist">
+    <button type="button" role="tab" [attr.aria-selected]="tab() === 'assistant'" (click)="setTab('assistant')">Asistente</button>
+    <button type="button" role="tab" [attr.aria-selected]="tab() === 'documents'" (click)="setTab('documents')">Documentos</button>
+    <button type="button" role="tab" [attr.aria-selected]="tab() === 'movements'" (click)="setTab('movements')">
+      Movimientos <span class="mr-badge warn" *ngIf="progress()?.openReconciliations">{{ progress()?.openReconciliations }}</span>
+    </button>
+    <button type="button" role="tab" [attr.aria-selected]="tab() === 'calculation'" (click)="setTab('calculation')">Cálculo y borrador</button>
+    <button type="button" role="tab" [attr.aria-selected]="tab() === 'accountant'" (click)="setTab('accountant')">Contador</button>
+  </nav>
+
+  <!-- ASISTENTE -->
+  <div class="mr-grid" *ngIf="tab() === 'assistant'">
+    <section class="mr-card">
+      <h2>Siguiente paso</h2>
+      <p class="mr-muted" *ngIf="openTasks().length === 0">No hay tareas pendientes para ti en este momento.</p>
+      <ng-container *ngFor="let t of openTasks()">
+        <app-mr-task-answer *ngIf="t.kind !== 'ProfessionalReview' && isOwner()" [caseId]="caseId" [task]="t" [evidence]="evidenceFor(t)" (answered)="reload()" />
+        <div class="mr-task" *ngIf="t.kind === 'ProfessionalReview'">
+          <p class="prompt">{{ t.prompt }}</p><p class="mr-muted">{{ t.help }}</p>
+          <button class="mr-btn secondary small" type="button" (click)="setTab('accountant')">Ir a Contador</button>
+        </div>
+      </ng-container>
+    </section>
+    <section class="mr-card">
+      <h2>Conversación</h2>
+      <div class="mr-chat" #chatBox aria-live="polite">
+        <div *ngFor="let m of messages()" class="mr-msg" [ngClass]="m.role">{{ m.content }}</div>
+      </div>
+      <form (ngSubmit)="send()" class="mr-field" style="margin-top: 12px">
+        <label for="mr-chat-input">Escribe una pregunta</label>
+        <textarea id="mr-chat-input" name="msg" rows="2" maxlength="2000" [(ngModel)]="draftText" placeholder="Por ejemplo: ¿qué documentos necesito?"></textarea>
+        <div class="mr-actions"><button class="mr-btn small" type="submit" [disabled]="busy() || !draftText.trim()">Enviar</button></div>
+        <span class="mr-muted">No escribas contraseñas. El asistente solo usa como datos tus respuestas y los documentos que confirmes.</span>
+      </form>
+    </section>
+  </div>
+
+  <!-- DOCUMENTOS -->
+  <section class="mr-card" *ngIf="tab() === 'documents'">
+    <h2>Documentos</h2>
+    <div class="mr-drop" *ngIf="isOwner()">
+      <label for="mr-file" class="mr-btn">Subir documento</label>
+      <input id="mr-file" type="file" hidden accept=".pdf,.xlsx,.csv,.jpg,.jpeg,.png" (change)="onFile($event)" [disabled]="busy()" />
+      <p class="mr-muted">PDF, XLSX, CSV, JPG o PNG · máximo 15 MB. Se guardan de forma privada y cifrada en tránsito.</p>
+    </div>
+    <p class="mr-muted" *ngIf="documents().length === 0">Aún no hay documentos.</p>
+    <div class="mr-table-wrap" *ngIf="documents().length">
+      <table class="mr-table">
+        <thead><tr><th>Archivo</th><th>Tipo</th><th>Estado</th><th>Valores</th><th></th></tr></thead>
+        <tbody>
+          <tr *ngFor="let d of documents()">
+            <td>{{ d.fileName }}<br /><span class="mr-muted">{{ d.createdAt | date: 'medium' }}</span></td>
+            <td>{{ d.kind }}</td>
+            <td><span class="mr-badge" [class.warn]="d.status === 'NeedsManualEntry'" [class.err]="d.status === 'Failed'">{{ d.status }}</span>
+              <div class="mr-muted" *ngIf="d.note">{{ d.note }}</div></td>
+            <td>{{ d.evidence.length }} propuestos · {{ d.transactionCount }} movimientos</td>
+            <td class="mr-actions">
+              <button class="mr-btn secondary small" type="button" (click)="download(d)">Descargar</button>
+              <button *ngIf="isOwner()" class="mr-btn danger small" type="button" (click)="remove(d)">Eliminar</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- MOVIMIENTOS -->
+  <section class="mr-card" *ngIf="tab() === 'movements'">
+    <h2>Movimientos por revisar</h2>
+    <p class="mr-muted" *ngIf="reconciliations().length === 0">Sube extractos bancarios para revisar depósitos, transferencias entre tus cuentas y duplicados.</p>
+    <div class="mr-task" *ngFor="let r of reconciliations()">
+      <p class="prompt">{{ r.explanation }} <span class="mr-badge" [class.ok]="!r.isOpen">{{ r.isOpen ? 'Pendiente' : (resolutionLabels[r.resolution ?? ''] ?? 'Resuelto') }}</span></p>
+      <table class="mr-table">
+        <tbody><tr *ngFor="let t of r.transactions"><td>{{ t.date }}</td><td>{{ t.description }}</td><td class="num">{{ t.amount | currency: 'COP' : 'symbol-narrow' : '1.0-0' : 'es' }}</td><td class="mr-muted">{{ t.locator }}</td></tr></tbody>
+      </table>
+      <div class="mr-actions" *ngIf="r.isOpen && isOwner()">
+        <button *ngFor="let res of r.allowedResolutions" class="mr-btn secondary small" type="button" (click)="resolve(r, res)">{{ resolutionLabels[res] ?? res }}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- CÁLCULO Y BORRADOR -->
+  <section class="mr-card" *ngIf="tab() === 'calculation'">
+    <h2>Cálculo</h2>
+    <p class="mr-muted">Motor determinista con reglas del año gravable 2025 que citan su norma. Las reglas están pendientes de aprobación profesional.</p>
+    <div class="mr-actions">
+      <button class="mr-btn" type="button" (click)="calculate()" [disabled]="busy() || !progress()?.canCalculate">Calcular</button>
+      <span class="mr-muted" *ngIf="!progress()?.canCalculate">Completa las preguntas, confirmaciones y movimientos pendientes para calcular.</span>
+    </div>
+
+    <ng-container *ngIf="calculation() as c">
+      <div class="mr-alert" [class.warn]="c.status !== 'ReadyForApproval'" style="margin-top: 12px">
+        <strong>{{ c.isPreview ? 'Vista previa' : c.status === 'Blocked' ? 'Cálculo bloqueado' : c.status === 'Preliminary' ? 'Resultado preliminar' : 'Listo para aprobación' }}</strong>
+        · {{ c.engineVersion }} · reglas {{ c.ruleSetVersion }}
+        <ul *ngIf="c.blocking.length"><li *ngFor="let b of c.blocking">{{ b.message }}</li></ul>
+        <ul *ngIf="c.warnings.length"><li *ngFor="let w of c.warnings">{{ w.message }}</li></ul>
+      </div>
+      <p *ngIf="c.obligation.mustFile !== null">
+        <strong>{{ c.obligation.mustFile ? 'Según tus datos, estás obligado a declarar.' : 'Según tus datos, no superas los topes de obligación.' }}</strong>
+        <span class="mr-muted"> {{ c.obligation.reasons.join(' ') }}</span>
+      </p>
+    </ng-container>
+
+    <ng-container *ngIf="draft() as d; else calcLines">
+      <h3>Borrador v{{ d.version }} <span class="mr-badge" [class.ok]="d.status === 'ApprovedByAccountant' || d.status === 'ConfirmedByTaxpayer'">{{ d.status }}</span></h3>
+      <p class="mr-muted">{{ d.formVersion }}</p>
+      <div class="mr-table-wrap">
+        <table class="mr-table">
+          <thead><tr><th>Casilla</th><th>Concepto</th><th class="num">Valor</th><th>Regla y fórmula</th></tr></thead>
+          <tbody>
+            <tr *ngFor="let l of d.lines">
+              <td>{{ l.boxNumber ?? 'por verificar' }}</td>
+              <td>{{ l.label }}<div class="mr-muted" *ngFor="let w of l.warnings">⚠ {{ w }}</div></td>
+              <td class="num">{{ l.value | currency: 'COP' : 'symbol-narrow' : '1.0-0' : 'es' }}</td>
+              <td class="mr-muted">{{ l.ruleCode }} · {{ l.formula }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ul class="mr-muted"><li *ngFor="let x of d.disclaimers">{{ x }}</li></ul>
+      <p class="mr-muted" *ngIf="d.reviewedAt">Revisado el {{ d.reviewedAt | date: 'medium' }}<span *ngIf="d.reviewComment"> · «{{ d.reviewComment }}»</span></p>
+      <div class="mr-actions" *ngIf="d.status === 'ApprovedByAccountant' || d.status === 'ConfirmedByTaxpayer'">
+        <button class="mr-btn secondary" type="button" (click)="exportDraft('csv')">Exportar CSV</button>
+        <button class="mr-btn secondary" type="button" (click)="exportDraft('json')">Exportar JSON</button>
+        <button *ngIf="isOwner() && d.status === 'ApprovedByAccountant'" class="mr-btn" type="button" (click)="markFiled()">Ya la presenté en la DIAN</button>
+      </div>
+      <p class="mr-muted" *ngIf="d.status === 'ApprovedByAccountant'">
+        Diligencia el formulario 210 en el portal de la DIAN con tu propia cuenta usando estos valores. Mi renta no presenta la declaración.
+      </p>
+    </ng-container>
+    <ng-template #calcLines>
+      <div class="mr-table-wrap" *ngIf="calculation()?.lines?.length">
+        <table class="mr-table">
+          <thead><tr><th>Concepto</th><th class="num">Valor</th><th>Regla</th></tr></thead>
+          <tbody><tr *ngFor="let l of calculation()?.lines"><td>{{ l.label }}<div class="mr-muted" *ngFor="let w of l.warnings">⚠ {{ w }}</div></td>
+            <td class="num">{{ l.value | currency: 'COP' : 'symbol-narrow' : '1.0-0' : 'es' }}</td><td class="mr-muted">{{ l.ruleCode }}</td></tr></tbody>
+        </table>
+      </div>
+    </ng-template>
+  </section>
+
+  <!-- CONTADOR -->
+  <section class="mr-card" *ngIf="tab() === 'accountant'">
+    <ng-container *ngIf="isOwner()">
+      <h2>Tu contador</h2>
+      <p class="mr-muted">Autoriza a un contador registrado en Mi renta para revisar y aprobar tu borrador. Puedes revocar el acceso cuando quieras.</p>
+      <div class="mr-field"><label for="mr-acc">Correo del contador</label><input id="mr-acc" type="email" [(ngModel)]="accountantEmail" /></div>
+      <div class="mr-actions">
+        <button class="mr-btn" type="button" (click)="grant()">Autorizar</button>
+        <button class="mr-btn secondary" type="button" (click)="revoke()">Revocar accesos</button>
+      </div>
+      <h3>Recordatorios</h3>
+      <label class="mr-check">
+        <input type="checkbox" [checked]="!session.user()?.remindersOptOut" (change)="toggleReminders(!$any($event.target).checked)" />
+        <span>Recibir recordatorios por correo (sin cifras ni documentos).</span>
+      </label>
+    </ng-container>
+
+    <ng-container *ngIf="isAccountant()">
+      <h2>Valores del contador</h2>
+      <p class="mr-muted">Conceptos que el asistente no calcula. Quedan registrados con tu identidad.</p>
+      <div class="mr-field" *ngFor="let f of accountantFacts">
+        <label [for]="f.code">{{ f.label }}</label>
+        <div class="mr-actions">
+          <input [id]="f.code" inputmode="numeric" [(ngModel)]="accountantValues[f.code]" placeholder="0" />
+          <button class="mr-btn small" type="button" (click)="saveAccountantFact(f.code)">Guardar</button>
+        </div>
+      </div>
+      <h3>Revisión del borrador</h3>
+      <p class="mr-muted" *ngIf="!draft()">Calcula el expediente para generar el borrador. <button class="mr-btn secondary small" type="button" (click)="loadCalculation()">Actualizar</button></p>
+      <ng-container *ngIf="draft() as d">
+        <p>Borrador v{{ d.version }} · {{ d.status }} · cálculo {{ d.calculationStatus }}</p>
+        <div class="mr-field"><label for="mr-rc">Comentario</label><textarea id="mr-rc" rows="2" [(ngModel)]="reviewComment"></textarea></div>
+        <label class="mr-check" *ngIf="d.calculationStatus === 'Preliminary'">
+          <input type="checkbox" [(ngModel)]="ackRules" /> <span>Revisé que las reglas pendientes de aprobación aplican a este caso.</span>
+        </label>
+        <div class="mr-actions" *ngIf="d.status === 'Draft'">
+          <button class="mr-btn" type="button" (click)="review('approve')">Aprobar</button>
+          <button class="mr-btn secondary" type="button" (click)="review('reject')">Devolver con comentarios</button>
+        </div>
+      </ng-container>
+    </ng-container>
+  </section>
+</div>
